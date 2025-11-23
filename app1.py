@@ -3,7 +3,6 @@ import tempfile
 import numpy as np
 import os
 from PIL import Image
-import sys
 
 # ------------------------------------------------------------------
 # CONFIGURATION APP
@@ -74,6 +73,57 @@ def analyze_image(img):
         return img, "Erreur", "Erreur"
 
 # ------------------------------------------------------------------
+# FONCTION ANALYSE VIDÉO AVEC IMAGEIO
+# ------------------------------------------------------------------
+def detect_video(video_file):
+    """Analyse la vidéo sans cv2 (compatible Streamlit Cloud)."""
+    try:
+        import imageio.v3 as iio
+        
+        # Sauvegarde temporaire
+        tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+        tfile.write(video_file.read())
+        tfile.close()
+
+        # Lecture de la vidéo avec imageio
+        video_reader = iio.imiter(tfile.name, plugin="pyav")
+        
+        output_frames = []
+        frame_count = 0
+        
+        # Création d'une placeholder pour la progression
+        progress_placeholder = st.empty()
+        progress_bar = st.progress(0)
+        
+        for frame in video_reader:
+            frame_count += 1
+            progress_placeholder.text(f"Traitement de la frame {frame_count}")
+            
+            # Analyse de la frame
+            results = model(frame)[0]
+            annotated = results.plot()
+            output_frames.append(annotated)
+            
+            # Mise à jour toutes les 10 frames pour éviter de ralentir l'interface
+            if frame_count % 10 == 0:
+                progress_bar.progress(min(frame_count / 100, 1.0))  # Estimation
+        
+        # Nettoyage
+        os.unlink(tfile.name)
+        
+        progress_placeholder.empty()
+        progress_bar.empty()
+        
+        return output_frames
+    
+    except Exception as e:
+        st.error(f"Erreur lors de l'analyse de la vidéo : {e}")
+        # Nettoyage en cas d'erreur
+        if 'tfile' in locals() and os.path.exists(tfile.name):
+            os.unlink(tfile.name)
+        return []
+
+# ------------------------------------------------------------------
 # INTERFACE UTILISATEUR
 # ------------------------------------------------------------------
 st.sidebar.title("📂 Options")
@@ -105,11 +155,11 @@ if mode == "Image":
                     st.subheader("📌 Résultat")
                     st.image(annotated, caption=f"Prédiction : {prediction}", use_column_width=True)
                     
-                    # Affichage du statut CORRIGÉ
+                    # Affichage du statut
                     if "pleine" in class_name.lower():
                         st.success("🗑️ Poubelle pleine détectée")
                     elif "vide" in class_name.lower():
-                        st.success("poubelle vide détectée")  # CORRECTION ICI
+                        st.success("poubelle vide détectée")
                     elif "Aucune" in class_name:
                         st.warning("Aucune poubelle détectée")
                         
@@ -123,7 +173,7 @@ elif mode == "Vidéo":
     uploaded_video = st.file_uploader(
         "Importer une vidéo", 
         type=["mp4", "mov"],
-        help="Formats recommandés : MP4, MOV (max 50MB)"
+        help="Formats recommandés : MP4, MOV"
     )
 
     if uploaded_video is not None:
@@ -131,77 +181,30 @@ elif mode == "Vidéo":
         st.video(uploaded_video)
         
         if st.button("🔍 Analyser la vidéo", type="primary"):
-            with st.spinner("Analyse de la vidéo en cours... Cela peut prendre quelques minutes."):
+            with st.spinner("Préparation de l'analyse..."):
                 try:
-                    # Sauvegarde temporaire
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_video:
-                        temp_video.write(uploaded_video.read())
-                        video_path = temp_video.name
-
-                    # Import différé de cv2
-                    import cv2
+                    # Réinitialiser le curseur du fichier
+                    uploaded_video.seek(0)
                     
-                    # Lecture de la vidéo
-                    cap = cv2.VideoCapture(video_path)
+                    # Analyser la vidéo avec imageio
+                    output_frames = detect_video(uploaded_video)
                     
-                    if not cap.isOpened():
-                        st.error("Impossible d'ouvrir la vidéo")
-                        os.unlink(video_path)
-                        st.stop()
-                    
-                    # Préparation pour l'affichage
-                    st.subheader("🎬 Vidéo analysée")
-                    video_placeholder = st.empty()
-                    progress_bar = st.progress(0)
-                    status_text = st.empty()
-                    
-                    # Statistiques
-                    frame_count = 0
-                    detections = []
-                    
-                    while True:
-                        ret, frame = cap.read()
-                        if not ret:
-                            break
-                            
-                        frame_count += 1
-                        status_text.text(f"Traitement de la frame {frame_count}")
+                    if output_frames:
+                        st.subheader("🎬 Résultat de l'analyse")
+                        st.success(f"✅ Analyse terminée ! {len(output_frames)} frames traitées")
                         
-                        # Analyse de la frame
-                        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                        annotated_frame, prediction, class_name = analyze_image(frame_rgb)
+                        # Afficher quelques frames résultats
+                        st.info("Quelques frames annotées :")
+                        cols = st.columns(3)
+                        for i, frame in enumerate(output_frames[:6]):  # Afficher les 6 premières frames
+                            if i < 6:
+                                cols[i % 3].image(frame, use_column_width=True)
+                    
+                    else:
+                        st.error("❌ Aucun résultat obtenu de l'analyse vidéo")
                         
-                        # Affichage de la frame annotée
-                        video_placeholder.image(annotated_frame, use_column_width=True)
-                        
-                        # Collecte des statistiques
-                        if "pleine" in class_name.lower() or "vide" in class_name.lower():
-                            detections.append(class_name)
-                    
-                    cap.release()
-                    
-                    # Nettoyage
-                    os.unlink(video_path)
-                    
-                    # Affichage des résultats
-                    if detections:
-                        pleines = len([d for d in detections if "pleine" in d.lower()])
-                        vides = len([d for d in detections if "vide" in d.lower()])
-                        
-                        st.subheader("📊 Statistiques")
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.metric("Poubelles pleines", pleines)
-                        with col2:
-                            st.metric("Poubelles vides", vides)
-                    
-                    st.success("✅ Analyse vidéo terminée !")
-                    
                 except Exception as e:
                     st.error(f"Erreur lors de l'analyse vidéo : {e}")
-                    # Nettoyage en cas d'erreur
-                    if 'video_path' in locals() and os.path.exists(video_path):
-                        os.unlink(video_path)
 
 # ------------------------------------------------------------------
 # INFORMATIONS
@@ -218,9 +221,4 @@ with st.sidebar:
     1. Choisissez Image ou Vidéo
     2. Importez votre fichier
     3. Cliquez sur Analyser
-    
-    **Limitations Streamlit Cloud :**
-    - Vidéos max 50MB
-    - Timeout après 10 minutes
-    - Pas de GPU
     """)
