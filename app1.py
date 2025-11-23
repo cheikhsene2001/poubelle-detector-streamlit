@@ -3,6 +3,7 @@ import tempfile
 import numpy as np
 import os
 from PIL import Image
+import sys
 
 # ------------------------------------------------------------------
 # CONFIGURATION APP
@@ -17,7 +18,7 @@ st.title("🚮 Détection : Poubelle Pleine ou Vide (YOLOv8)")
 st.write("Analysez une image ou une vidéo pour déterminer si une poubelle est pleine ou vide.")
 
 # ------------------------------------------------------------------
-# CHARGEMENT MODELE YOLO
+# CHARGEMENT MODELE YOLO AVEC GESTION D'ERREURS AMÉLIORÉE
 # ------------------------------------------------------------------
 @st.cache_resource
 def load_model():
@@ -27,11 +28,28 @@ def load_model():
             st.error("❌ Fichier 'best.pt' non trouvé. Assurez-vous qu'il est dans le dépôt.")
             return None
         
+        # Forcer l'utilisation de opencv-python-headless
+        import os
+        os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '0'
+        
         # Import différé pour mieux gérer les erreurs
         from ultralytics import YOLO
         model = YOLO("best.pt")
         st.sidebar.success("✅ Modèle chargé avec succès")
         return model
+    except ImportError as e:
+        if "libGL.so.1" in str(e):
+            st.error("""
+            **Erreur de dépendance OpenCV**
+            
+            Solution : Ajoutez `opencv-python-headless` à votre fichier requirements.txt :
+            ```
+            opencv-python-headless
+            ```
+            """)
+        else:
+            st.error(f"❌ Erreur d'import : {str(e)}")
+        return None
     except Exception as e:
         st.error(f"❌ Erreur lors du chargement du modèle : {str(e)}")
         return None
@@ -42,10 +60,21 @@ with st.spinner("Chargement du modèle YOLO..."):
 
 if model is None:
     st.error("""
-    **Impossible de charger le modèle. Causes possibles :**
-    - Fichier 'best.pt' manquant
-    - Problème de dépendances
-    - Mémoire insuffisante
+    **Impossible de charger le modèle. Solutions possibles :**
+    
+    1. **Vérifiez le fichier requirements.txt** :
+    ```txt
+    streamlit
+    ultralytics
+    opencv-python-headless
+    imageio
+    imageio-ffmpeg
+    numpy
+    Pillow
+    ```
+    
+    2. **Vérifiez que 'best.pt' est présent** dans le dépôt GitHub
+    3. **Redéployez l'application** après ces modifications
     """)
     st.stop()
 
@@ -73,7 +102,7 @@ def analyze_image(img):
         return img, "Erreur", "Erreur"
 
 # ------------------------------------------------------------------
-# FONCTION ANALYSE VIDÉO AVEC IMAGEIO
+# FONCTION ANALYSE VIDÉO AVEC IMAGEIO (SANS CV2)
 # ------------------------------------------------------------------
 def detect_video(video_file):
     """Analyse la vidéo sans cv2 (compatible Streamlit Cloud)."""
@@ -94,25 +123,27 @@ def detect_video(video_file):
         # Création d'une placeholder pour la progression
         progress_placeholder = st.empty()
         progress_bar = st.progress(0)
+        status_text = st.empty()
         
         for frame in video_reader:
             frame_count += 1
-            progress_placeholder.text(f"Traitement de la frame {frame_count}")
+            status_text.text(f"Traitement de la frame {frame_count}")
+            
+            # Mise à jour de la barre de progression (estimation)
+            if frame_count % 5 == 0:
+                progress_bar.progress(min(frame_count / 50, 1.0))
             
             # Analyse de la frame
             results = model(frame)[0]
             annotated = results.plot()
             output_frames.append(annotated)
-            
-            # Mise à jour toutes les 10 frames pour éviter de ralentir l'interface
-            if frame_count % 10 == 0:
-                progress_bar.progress(min(frame_count / 100, 1.0))  # Estimation
         
         # Nettoyage
         os.unlink(tfile.name)
         
         progress_placeholder.empty()
         progress_bar.empty()
+        status_text.empty()
         
         return output_frames
     
@@ -196,7 +227,7 @@ elif mode == "Vidéo":
                         # Afficher quelques frames résultats
                         st.info("Quelques frames annotées :")
                         cols = st.columns(3)
-                        for i, frame in enumerate(output_frames[:6]):  # Afficher les 6 premières frames
+                        for i, frame in enumerate(output_frames[:6]):
                             if i < 6:
                                 cols[i % 3].image(frame, use_column_width=True)
                     
