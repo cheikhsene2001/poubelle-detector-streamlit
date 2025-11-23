@@ -1,133 +1,102 @@
 import streamlit as st
-import numpy as np
-import os
-from PIL import Image
+from ultralytics import YOLO
+import cv2
 import tempfile
+import numpy as np
 
 # ------------------------------------------------------------------
 # CONFIGURATION APP
 # ------------------------------------------------------------------
-st.set_page_config(
-    page_title="Détection Poubelle", 
-    layout="wide",
-    page_icon="🚮"
-)
-
+st.set_page_config(page_title="Détection Poubelle", layout="wide")
 st.title("🚮 Détection : Poubelle Pleine ou Vide (YOLOv8)")
-st.write("Analysez une image pour déterminer si une poubelle est pleine ou vide.")
+st.write("Analysez une image ou une vidéo pour déterminer si une poubelle est pleine ou vide.")
 
 # ------------------------------------------------------------------
 # CHARGEMENT MODELE YOLO
 # ------------------------------------------------------------------
-@st.cache_resource
-def load_model():
-    try:
-        # Vérifier si le modèle existe
-        if not os.path.exists("best.pt"):
-            st.error("❌ Fichier 'best.pt' non trouvé.")
-            return None
-        
-        # Forcer l'utilisation de PIL au lieu d'OpenCV si possible
-        os.environ['ULTRALYTICS_OPENCV'] = '0'
-        
-        # Import différé
-        from ultralytics import YOLO
-        model = YOLO("best.pt")
-        return model
-    except Exception as e:
-        st.error(f"❌ Erreur lors du chargement du modèle : {str(e)}")
-        return None
+MODEL_PATH = "yolov8s.pt"     # Mets ici ton modèle entraîné
+model = YOLO(MODEL_PATH)
 
-# Chargement du modèle
-model = load_model()
-
-if model is None:
-    st.error("""
-    **Dépannage :**
-    1. Vérifiez que `best.pt` est dans votre dépôt GitHub
-    2. Vérifiez votre fichier requirements.txt
-    3. Redéployez l'application
-    """)
-    st.stop()
+st.sidebar.title("📂 Options")
+mode = st.sidebar.radio("Choisir le mode :", ["Image", "Vidéo"])
 
 # ------------------------------------------------------------------
 # FONCTION ANALYSE IMAGE
 # ------------------------------------------------------------------
-def analyze_image(image):
-    try:
-        # Utiliser directement l'image PIL avec Ultralytics
-        results = model(image)
-        
-        if len(results) > 0:
-            result = results[0]
-            annotated_img = result.plot()
-            
-            # Récupérer les prédictions
-            if len(result.boxes) > 0 and len(result.boxes.cls) > 0:
-                cls_id = int(result.boxes.cls[0])
-                class_name = model.names[cls_id]
-                confidence = float(result.boxes.conf[0])
-                prediction_text = f"{class_name} (confiance: {confidence:.2f})"
-            else:
-                class_name = "Aucune détection"
-                prediction_text = "Aucune poubelle détectée"
-            
-            return annotated_img, prediction_text, class_name
-        else:
-            return image, "Aucune détection", "Aucune détection"
-            
-    except Exception as e:
-        st.error(f"Erreur lors de l'analyse : {e}")
-        return image, "Erreur", "Erreur"
+def analyze_image(img):
+    results = model(img)[0]
+    annotated_img = results.plot()
+
+    # Récupérer la prédiction texte (classe)
+    if len(results.boxes.cls) > 0:
+        cls_id = int(results.boxes.cls[0])
+        class_name = model.names[cls_id]
+    else:
+        class_name = "Aucune poubelle détectée"
+
+    return annotated_img, class_name
 
 # ------------------------------------------------------------------
-# INTERFACE UTILISATEUR
+# MODE IMAGE
 # ------------------------------------------------------------------
-st.sidebar.title("📂 Options")
+if mode == "Image":
+    st.subheader("📸 Upload d'une image")
+    uploaded_image = st.file_uploader("Importer une image", type=["jpg", "jpeg", "png"])
 
-st.subheader("📸 Upload d'une image")
-uploaded_image = st.file_uploader(
-    "Importer une image", 
-    type=["jpg", "jpeg", "png"],
-    help="Formats supportés : JPG, JPEG, PNG"
-)
+    if uploaded_image:
+        file_bytes = np.frombuffer(uploaded_image.read(), np.uint8)
+        img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
-if uploaded_image is not None:
-    # Affichage de l'image originale
-    image = Image.open(uploaded_image)
-    st.image(image, caption="Image importée", use_column_width=True)
+        st.image(img_rgb, caption="Image importée", use_column_width=True)
 
-    if st.button("🔍 Analyser l'image", type="primary"):
-        with st.spinner("Analyse en cours..."):
-            try:
-                annotated, prediction, class_name = analyze_image(image)
-                
-                st.subheader("📌 Résultat")
-                st.image(annotated, caption=f"Prédiction : {prediction}", use_column_width=True)
-                
-                # Affichage du statut
-                if "pleine" in class_name.lower():
-                    st.success("🗑️ Poubelle pleine détectée")
-                elif "vide" in class_name.lower():
-                    st.success("poubelle vide détectée")
-                elif "Aucune" in class_name:
-                    st.warning("Aucune poubelle détectée")
-                    
-            except Exception as e:
-                st.error(f"Erreur lors du traitement de l'image : {e}")
+        if st.button("🔍 Analyser l'image"):
+            annotated, prediction = analyze_image(img_rgb)
+
+            st.subheader("📌 Résultat")
+            st.image(annotated, caption=f"Prédiction : {prediction}", use_column_width=True)
 
 # ------------------------------------------------------------------
-# INFORMATIONS
+# MODE VIDEO
+# ------------------------------------------------------------------
+elif mode == "Vidéo":
+    st.subheader("📹 Upload d'une vidéo")
+    uploaded_video = st.file_uploader("Importer une vidéo", type=["mp4", "mov", "avi", "mkv"])
+
+    if uploaded_video:
+        st.video(uploaded_video)
+
+        temp_video = tempfile.NamedTemporaryFile(delete=False)
+        temp_video.write(uploaded_video.read())
+        video_path = temp_video.name
+
+        if st.button("🔍 Analyser la vidéo"):
+            st.warning("Analyse en cours... veuillez patienter.")
+
+            cap = cv2.VideoCapture(video_path)
+            frame_placeholder = st.empty()
+
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                results = model(frame_rgb)[0]
+                annotated_frame = results.plot()
+
+                frame_placeholder.image(annotated_frame, use_column_width=True)
+
+            cap.release()
+            st.success("Analyse terminée ✔")
+
+# ------------------------------------------------------------------
+# BOUTON TELECHARGER LE MODELE
 # ------------------------------------------------------------------
 with st.sidebar:
-    st.markdown("---")
-    st.subheader("ℹ️ Informations")
-    st.markdown("""
-    **Fonctionnalités :**
-    - 🗑️ Détection poubelles pleines
-    - 🗑️ Détection poubelles vides
-    
-    **Instructions:**
-    1. Importez votre image
-    2. Cliquez sur Analyser
-    """)
+    st.download_button(
+        label="⬇ Télécharger le modèle YOLO",
+        data=open(MODEL_PATH, "rb").read(),
+        file_name="yolov8s.pt",
+        mime="application/octet-stream"
+    )
