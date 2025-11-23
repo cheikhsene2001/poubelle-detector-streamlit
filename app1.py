@@ -18,7 +18,7 @@ st.title("🚮 Détection : Poubelle Pleine ou Vide (YOLOv8)")
 st.write("Analysez une image ou une vidéo pour déterminer si une poubelle est pleine ou vide.")
 
 # ------------------------------------------------------------------
-# CHARGEMENT MODELE YOLO AVEC GESTION D'ERREURS AMÉLIORÉE
+# CHARGEMENT MODELE YOLO AVEC GESTION D'ERREURS CORRIGÉE
 # ------------------------------------------------------------------
 @st.cache_resource
 def load_model():
@@ -29,7 +29,6 @@ def load_model():
             return None
         
         # Forcer l'utilisation de opencv-python-headless
-        import os
         os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '0'
         
         # Import différé pour mieux gérer les erreurs
